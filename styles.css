@@ -37,133 +37,100 @@ header h1 {
   color: #00ff88;
 }
 
-/* Sport tabs */
-#sport-tabs {
-  display: flex;
-  gap: 8px;
-  padding: 12px 0;
-}
-
-.sport-tab {
-  flex: 1;
-  min-width: 0;
-  padding: 12px 8px;
-  border: 1px solid #333;
-  border-radius: 10px;
-  background: #1a1a1a;
-  color: #aaa;
-  font-size: 14px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.2s;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.sport-tab:active {
-  transform: scale(0.96);
-}
-
-.sport-tab.active {
-  background: #1a3a1a;
-  border-color: #00ff88;
-  color: #00ff88;
-}
-
-.sport-tab .icon {
-  display: block;
-  font-size: 24px;
-  margin-bottom: 4px;
-}
-
-/* Scores */
-#scores-container {
-  padding: 8px 0;
-}
-
-.placeholder {
-  text-align: center;
-  color: #555;
-  padding: 40px 0;
-  font-size: 14px;
-}
-
-.loading-spinner {
-  text-align: center;
-  padding: 40px 0;
-  color: #555;
-  font-size: 14px;
-}
-
-.competition-section {
-  margin-bottom: 20px;
-}
-
-.competition-name {
+/* Section label */
+.section-label {
   font-size: 13px;
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  padding: 8px 0 6px;
-  border-bottom: 1px solid #222;
-  margin-bottom: 8px;
+  padding: 12px 0 10px;
 }
 
-.match-card {
-  display: flex;
-  align-items: center;
-  padding: 10px 12px;
-  background: #151515;
-  border-radius: 8px;
-  margin-bottom: 6px;
-}
-
-.match-teams {
-  flex: 1;
-  min-width: 0;
-}
-
-.match-team {
-  font-size: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.match-team:first-child {
-  margin-bottom: 2px;
-}
-
-.match-score {
+/* Sport selection list */
+#sport-list {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+}
+
+.sport-row {
+  display: flex;
   align-items: center;
-  min-width: 44px;
-  margin-left: 12px;
+  justify-content: space-between;
+  padding: 14px 12px;
+  background: #151515;
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.match-score .score {
-  font-size: 18px;
-  font-weight: 700;
-  color: #fff;
+.sport-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.match-score .score.upcoming {
+.sport-icon {
+  font-size: 28px;
+}
+
+.sport-details {
+  display: flex;
+  flex-direction: column;
+}
+
+.sport-name {
+  font-size: 16px;
+  color: #e0e0e0;
+  font-weight: 500;
+}
+
+.sport-competitions {
   font-size: 12px;
-  font-weight: 400;
-  color: #666;
-}
-
-.match-status {
-  font-size: 10px;
   color: #666;
   margin-top: 2px;
 }
 
-.match-status.finished {
-  color: #888;
+/* Toggle switch */
+.toggle {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  flex-shrink: 0;
 }
 
-.match-status.live {
-  color: #ff4444;
-  font-weight: 700;
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: #333;
+  border-radius: 14px;
+  transition: background 0.2s;
+  pointer-events: none;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  background: #888;
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.toggle input:checked + .toggle-slider {
+  background: #1a3a1a;
+}
+
+.toggle input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+  background: #00ff88;
 }

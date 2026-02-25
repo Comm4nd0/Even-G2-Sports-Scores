@@ -1,23 +1,24 @@
-import { Sport, Match, SPORTS_CONFIG } from './types';
+import { Sport, SPORTS_CONFIG } from './types';
 
-type SportSelectCallback = (sport: Sport) => void;
+type SportsChangeCallback = (enabledSports: Sport[]) => void;
+
+const STORAGE_KEY = 'enabled-sports';
 
 export class PhoneUI {
-  private tabsContainer: HTMLElement;
-  private scoresContainer: HTMLElement;
+  private listContainer: HTMLElement;
   private statusEl: HTMLElement;
-  private activeSportId: string | null = null;
-  private onSportSelect: SportSelectCallback | null = null;
+  private enabledIds: Set<string>;
+  private onSportsChange: SportsChangeCallback | null = null;
 
   constructor() {
-    this.tabsContainer = document.getElementById('sport-tabs')!;
-    this.scoresContainer = document.getElementById('scores-container')!;
+    this.listContainer = document.getElementById('sport-list')!;
     this.statusEl = document.getElementById('status')!;
-    this.buildTabs();
+    this.enabledIds = this.loadEnabledIds();
+    this.buildList();
   }
 
-  setOnSportSelect(cb: SportSelectCallback): void {
-    this.onSportSelect = cb;
+  setOnSportsChange(cb: SportsChangeCallback): void {
+    this.onSportsChange = cb;
   }
 
   setStatus(msg: string, ok: boolean): void {
@@ -25,115 +26,92 @@ export class PhoneUI {
     this.statusEl.className = ok ? 'connected' : '';
   }
 
-  private buildTabs(): void {
+  getEnabledSports(): Sport[] {
+    return SPORTS_CONFIG.filter((s) => this.enabledIds.has(s.id));
+  }
+
+  private loadEnabledIds(): Set<string> {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const ids = JSON.parse(stored) as string[];
+        const valid = ids.filter((id) => SPORTS_CONFIG.some((s) => s.id === id));
+        if (valid.length > 0) return new Set(valid);
+      }
+    } catch {
+      /* ignore */
+    }
+    return new Set(SPORTS_CONFIG.map((s) => s.id));
+  }
+
+  private saveEnabledIds(): void {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...this.enabledIds]));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private buildList(): void {
+    this.listContainer.textContent = '';
+
     for (const sport of SPORTS_CONFIG) {
-      const tab = document.createElement('button');
-      tab.className = 'sport-tab';
-      tab.dataset.sportId = sport.id;
+      const row = document.createElement('label');
+      row.className = 'sport-row';
+
+      const info = document.createElement('div');
+      info.className = 'sport-info';
 
       const icon = document.createElement('span');
-      icon.className = 'icon';
+      icon.className = 'sport-icon';
       icon.textContent = sport.icon;
-      tab.appendChild(icon);
+      info.appendChild(icon);
 
-      tab.appendChild(document.createTextNode(sport.name));
+      const details = document.createElement('div');
+      details.className = 'sport-details';
 
-      tab.addEventListener('click', () => this.selectSport(sport));
-      this.tabsContainer.appendChild(tab);
+      const name = document.createElement('span');
+      name.className = 'sport-name';
+      name.textContent = sport.name;
+      details.appendChild(name);
+
+      const compCount = document.createElement('span');
+      compCount.className = 'sport-competitions';
+      compCount.textContent = `${sport.competitions.length} competition${sport.competitions.length !== 1 ? 's' : ''}`;
+      details.appendChild(compCount);
+
+      info.appendChild(details);
+      row.appendChild(info);
+
+      const toggle = document.createElement('div');
+      toggle.className = 'toggle';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = this.enabledIds.has(sport.id);
+      checkbox.addEventListener('change', () => this.toggleSport(sport.id, checkbox.checked));
+      toggle.appendChild(checkbox);
+
+      const slider = document.createElement('span');
+      slider.className = 'toggle-slider';
+      toggle.appendChild(slider);
+
+      row.appendChild(toggle);
+      this.listContainer.appendChild(row);
     }
   }
 
-  private selectSport(sport: Sport): void {
-    this.activeSportId = sport.id;
-
-    const tabs = this.tabsContainer.querySelectorAll('.sport-tab');
-    tabs.forEach((tab) => {
-      const el = tab as HTMLElement;
-      el.classList.toggle('active', el.dataset.sportId === sport.id);
-    });
-
-    this.scoresContainer.textContent = '';
-    const loading = document.createElement('p');
-    loading.className = 'loading-spinner';
-    loading.textContent = 'Loading scores...';
-    this.scoresContainer.appendChild(loading);
-
-    this.onSportSelect?.(sport);
-  }
-
-  showScores(sport: Sport, competitionScores: Map<string, Match[]>): void {
-    if (sport.id !== this.activeSportId) return;
-
-    this.scoresContainer.textContent = '';
-    let hasAnyScores = false;
-
-    for (const comp of sport.competitions) {
-      const matches = competitionScores.get(comp.id);
-      if (!matches || matches.length === 0) continue;
-      hasAnyScores = true;
-
-      const section = document.createElement('div');
-      section.className = 'competition-section';
-
-      const heading = document.createElement('div');
-      heading.className = 'competition-name';
-      heading.textContent = comp.name;
-      section.appendChild(heading);
-
-      for (const match of matches) {
-        const card = document.createElement('div');
-        card.className = 'match-card';
-
-        const teams = document.createElement('div');
-        teams.className = 'match-teams';
-
-        const home = document.createElement('div');
-        home.className = 'match-team';
-        home.textContent = match.homeTeam;
-        teams.appendChild(home);
-
-        const away = document.createElement('div');
-        away.className = 'match-team';
-        away.textContent = match.awayTeam;
-        teams.appendChild(away);
-
-        card.appendChild(teams);
-
-        const scoreDiv = document.createElement('div');
-        scoreDiv.className = 'match-score';
-
-        const score = document.createElement('span');
-        score.className = 'score';
-        if (match.homeScore !== null && match.awayScore !== null) {
-          score.textContent = `${match.homeScore} - ${match.awayScore}`;
-        } else {
-          score.textContent = match.time || 'TBD';
-          score.classList.add('upcoming');
-        }
-        scoreDiv.appendChild(score);
-
-        const status = document.createElement('span');
-        status.className = `match-status ${match.status}`;
-        status.textContent =
-          match.status === 'finished'
-            ? 'FT'
-            : match.status === 'live'
-              ? 'LIVE'
-              : match.date;
-        scoreDiv.appendChild(status);
-
-        card.appendChild(scoreDiv);
-        section.appendChild(card);
+  private toggleSport(sportId: string, enabled: boolean): void {
+    if (enabled) {
+      this.enabledIds.add(sportId);
+    } else {
+      if (this.enabledIds.size <= 1) {
+        this.buildList();
+        return;
       }
-
-      this.scoresContainer.appendChild(section);
+      this.enabledIds.delete(sportId);
     }
-
-    if (!hasAnyScores) {
-      const p = document.createElement('p');
-      p.className = 'placeholder';
-      p.textContent = 'No scores available';
-      this.scoresContainer.appendChild(p);
-    }
+    this.saveEnabledIds();
+    this.onSportsChange?.(this.getEnabledSports());
   }
 }
