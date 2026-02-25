@@ -1,0 +1,15 @@
+{
+  "package_id": "com.comm4nd0.sportsscores",
+  "edition": "202602",
+  "name": "Sports Scores",
+  "version": "1.0.0",
+  "min_app_version": "0.1.0",
+  "tagline": "Live sports scores for Even G2",
+  "description": "View latest scores for Soccer, Rugby, and Snooker on your Even G2 glasses. Browse major tournaments and scroll through match results.",
+  "author": "Comm4nd0",
+  "entrypoint": "index.html",
+  "permissions": {
+    "network": ["https://www.thesportsdb.com"],
+    "fs": []
+  }
+}
