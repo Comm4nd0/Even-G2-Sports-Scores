@@ -22,10 +22,13 @@ export class GlassesDisplay {
   private connected = false;
   private startupRendered = false;
   private pushInFlight = false;
+  private pendingContent: string | null = null;
 
   private onStatus: StatusCallback | null = null;
   private onSportSelect: SportSelectCallback | null = null;
   private onCompetitionSelect: CompetitionSelectCallback | null = null;
+
+  private enabledSports: Sport[] = [...SPORTS_CONFIG];
 
   private state: NavigationState = {
     screen: GlassesScreen.SPORT_SELECT,
@@ -45,6 +48,19 @@ export class GlassesDisplay {
   }
   setOnCompetitionSelect(cb: CompetitionSelectCallback): void {
     this.onCompetitionSelect = cb;
+  }
+
+  setEnabledSports(sports: Sport[]): void {
+    this.enabledSports = sports;
+    this.state = {
+      screen: GlassesScreen.SPORT_SELECT,
+      sportIndex: 0,
+      competitionIndex: 0,
+      cursorIndex: 0,
+      scrollOffset: 0,
+    };
+    this.currentMatches = [];
+    this.render();
   }
 
   private reportStatus(msg: string, ok: boolean): void {
@@ -176,7 +192,7 @@ export class GlassesDisplay {
         this.state.screen = GlassesScreen.COMPETITION_SELECT;
         this.state.cursorIndex = 0;
         this.state.scrollOffset = 0;
-        const sport = SPORTS_CONFIG[this.state.sportIndex];
+        const sport = this.enabledSports[this.state.sportIndex];
         this.onSportSelect?.(sport);
         this.render();
         break;
@@ -194,7 +210,7 @@ export class GlassesDisplay {
         this.state.screen = GlassesScreen.SCORES;
         this.state.cursorIndex = 0;
         this.state.scrollOffset = 0;
-        const sport = SPORTS_CONFIG[this.state.sportIndex];
+        const sport = this.enabledSports[this.state.sportIndex];
         const comp = sport.competitions[this.state.competitionIndex];
         this.onCompetitionSelect?.(sport, comp);
         this.pushContent(`${comp.name}\n\nLoading scores...`);
@@ -216,9 +232,9 @@ export class GlassesDisplay {
   private getItemCount(): number {
     switch (this.state.screen) {
       case GlassesScreen.SPORT_SELECT:
-        return SPORTS_CONFIG.length;
+        return this.enabledSports.length;
       case GlassesScreen.COMPETITION_SELECT:
-        return 1 + SPORTS_CONFIG[this.state.sportIndex].competitions.length;
+        return 1 + this.enabledSports[this.state.sportIndex].competitions.length;
       case GlassesScreen.SCORES:
         return 1 + this.currentMatches.length;
     }
@@ -255,14 +271,14 @@ export class GlassesDisplay {
   }
 
   private renderSportSelect(): void {
-    const items = SPORTS_CONFIG.map((s) => s.name);
+    const items = this.enabledSports.map((s) => s.name);
     this.pushContent(
       this.buildListScreen('SPORTS SCORES', items, this.state.cursorIndex, this.state.scrollOffset)
     );
   }
 
   private renderCompetitionSelect(): void {
-    const sport = SPORTS_CONFIG[this.state.sportIndex];
+    const sport = this.enabledSports[this.state.sportIndex];
     const items = ['< Back', ...sport.competitions.map((c) => c.name)];
     this.pushContent(
       this.buildListScreen(
@@ -275,7 +291,7 @@ export class GlassesDisplay {
   }
 
   private renderScores(): void {
-    const comp = SPORTS_CONFIG[this.state.sportIndex].competitions[this.state.competitionIndex];
+    const comp = this.enabledSports[this.state.sportIndex].competitions[this.state.competitionIndex];
 
     if (this.currentMatches.length === 0) {
       this.pushContent(`${comp.name}\n--------------------\n  No scores available`);
@@ -325,7 +341,11 @@ export class GlassesDisplay {
 
   private async pushContent(content: string): Promise<void> {
     if (!this.connected || !this.bridge || !this.startupRendered) return;
-    if (this.pushInFlight) return;
+
+    if (this.pushInFlight) {
+      this.pendingContent = content;
+      return;
+    }
 
     this.pushInFlight = true;
     try {
@@ -342,6 +362,11 @@ export class GlassesDisplay {
       // Silently handle update failures
     } finally {
       this.pushInFlight = false;
+      if (this.pendingContent !== null) {
+        const next = this.pendingContent;
+        this.pendingContent = null;
+        this.pushContent(next);
+      }
     }
   }
 }

@@ -1,7 +1,7 @@
 import { GlassesDisplay } from './GlassesDisplay';
 import { PhoneUI } from './PhoneUI';
 import { SportsService } from './SportsService';
-import { Sport, Competition, Match } from './types';
+import { Sport, Competition } from './types';
 
 console.log('[Main] Sports Scores app loaded');
 
@@ -14,22 +14,9 @@ glassesDisplay.setOnStatus((msg, ok) => {
   phoneUI.setStatus(msg, ok);
 });
 
-// Phone: user taps a sport → fetch all competitions for that sport
-phoneUI.setOnSportSelect(async (sport: Sport) => {
-  const allScores = new Map<string, Match[]>();
-
-  const promises = sport.competitions.map(async (comp) => {
-    const matches = await sportsService.getScores(comp);
-    allScores.set(comp.id, matches);
-  });
-
-  await Promise.allSettled(promises);
-  phoneUI.showScores(sport, allScores);
-});
-
-// Glasses: user selects a sport (navigation only, no fetch needed)
-glassesDisplay.setOnSportSelect((_sport: Sport) => {
-  // Navigation handled internally by GlassesDisplay
+// Phone: user toggles sports → update glasses with enabled sports
+phoneUI.setOnSportsChange((enabledSports: Sport[]) => {
+  glassesDisplay.setEnabledSports(enabledSports);
 });
 
 // Glasses: user selects a competition → fetch and display scores
@@ -43,13 +30,13 @@ glassesDisplay
   .init()
   .then(async (connected) => {
     if (!connected) {
-      phoneUI.setStatus('Glasses not connected - use phone', false);
+      phoneUI.setStatus('Glasses not connected', false);
       return;
     }
     phoneUI.setStatus('Connected to glasses', true);
-    glassesDisplay.showInitialScreen();
+    glassesDisplay.setEnabledSports(phoneUI.getEnabledSports());
   })
   .catch((err) => {
     console.error('[Main] Glasses init error:', err);
-    phoneUI.setStatus('Glasses not connected - use phone', false);
+    phoneUI.setStatus('Glasses not connected', false);
   });
