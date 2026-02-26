@@ -1,9 +1,9 @@
 import {
   waitForEvenAppBridge,
   CreateStartUpPageContainer,
+  RebuildPageContainer,
   StartUpPageCreateResult,
   TextContainerProperty,
-  TextContainerUpgrade,
   ListContainerProperty,
   ListItemContainerProperty,
   OsEventTypeList,
@@ -16,17 +16,20 @@ type CompetitionSelectCallback = (sport: Sport, competition: Competition) => voi
 
 const DISPLAY_WIDTH = 576;
 const DISPLAY_HEIGHT = 288;
-// Fixed dummy items in the event-capture list container.
-// This container is never rebuilt, so no spurious events are fired.
-const EVENT_ITEM_COUNT = 20;
+const HEADER_HEIGHT = 48;
+
+// Debounce scroll-triggered renders so rapid scrolling triggers only ONE rebuild
+const SCROLL_RENDER_DEBOUNCE_MS = 150;
+// Suppress events after a rebuild to ignore spurious list-init events
+const POST_REBUILD_SUPPRESS_MS = 200;
 
 export class GlassesDisplay {
   private bridge: EvenAppBridge | null = null;
   private connected = false;
   private startupRendered = false;
+  private rebuildInFlight = false;
   private suppressEventsUntil = 0;
-  private updateInFlight = false;
-  private pendingUpdate = false;
+  private scrollRenderTimer: ReturnType<typeof setTimeout> | null = null;
 
   private onStatus: StatusCallback | null = null;
   private onCompetitionSelect: CompetitionSelectCallback | null = null;
@@ -58,7 +61,7 @@ export class GlassesDisplay {
     };
     this.cursorIndex = 0;
     this.currentMatches = [];
-    this.updateDisplay();
+    this.renderNow();
   }
 
   private reportStatus(msg: string, ok: boolean): void {
@@ -78,48 +81,13 @@ export class GlassesDisplay {
         this.onEvent(event);
       });
 
-      // Suppress spurious events during initial page creation
+      // Suppress spurious events during startup
       this.suppressEventsUntil = Date.now() + 5000;
 
-      const content = this.getDisplayText();
-      const eventItems = Array.from({ length: EVENT_ITEM_COUNT }, () => ' ');
-
+      const { title, displayItems } = this.getDisplayContent();
       const result = await withTimeout(
         bridge.createStartUpPageContainer(
-          new CreateStartUpPageContainer({
-            containerTotalNum: 2,
-            textObject: [
-              new TextContainerProperty({
-                containerID: 1,
-                containerName: 'display',
-                content,
-                xPosition: 0,
-                yPosition: 0,
-                width: DISPLAY_WIDTH,
-                height: DISPLAY_HEIGHT,
-                isEventCapture: 0,
-                paddingLength: 0,
-              }),
-            ],
-            listObject: [
-              new ListContainerProperty({
-                containerID: 2,
-                containerName: 'events',
-                xPosition: 0,
-                yPosition: 0,
-                width: DISPLAY_WIDTH,
-                height: DISPLAY_HEIGHT,
-                isEventCapture: 1,
-                paddingLength: 0,
-                itemContainer: new ListItemContainerProperty({
-                  itemCount: EVENT_ITEM_COUNT,
-                  itemWidth: 0,
-                  isItemSelectBorderEn: 0,
-                  itemName: eventItems,
-                }),
-              }),
-            ],
-          })
+          new CreateStartUpPageContainer(this.buildPageConfig(title, displayItems))
         ),
         8_000
       );
@@ -131,7 +99,6 @@ export class GlassesDisplay {
 
       this.startupRendered = true;
       this.connected = true;
-      // Allow events after the list container finishes initializing
       this.suppressEventsUntil = Date.now() + 500;
       this.reportStatus('Connected', true);
       return true;
@@ -151,9 +118,9 @@ export class GlassesDisplay {
   private onEvent(event: any): void {
     if (event.sysEvent) return;
 
-    // Suppress spurious events after page creation
+    // Suppress spurious events fired by newly-created list containers
     if (Date.now() < this.suppressEventsUntil) {
-      console.log('[Glasses] Suppressing event during initialization');
+      console.log('[Glasses] Suppressing event after rebuild');
       return;
     }
 
@@ -183,7 +150,7 @@ export class GlassesDisplay {
   private navigateUp(): void {
     if (this.cursorIndex > 0) {
       this.cursorIndex--;
-      this.updateDisplay();
+      this.scheduleScrollRender();
     }
   }
 
@@ -191,8 +158,33 @@ export class GlassesDisplay {
     const itemCount = this.getItemCount();
     if (this.cursorIndex < itemCount - 1) {
       this.cursorIndex++;
-      this.updateDisplay();
+      this.scheduleScrollRender();
     }
+  }
+
+  /**
+   * Debounced render for scroll events.
+   * Rapid scrolling only triggers one rebuild after scrolling stops,
+   * preventing the rebuild→spurious-event cascade that was resetting cursorIndex.
+   */
+  private scheduleScrollRender(): void {
+    if (this.scrollRenderTimer) {
+      clearTimeout(this.scrollRenderTimer);
+    }
+    this.scrollRenderTimer = setTimeout(() => {
+      this.scrollRenderTimer = null;
+      this.renderNow();
+    }, SCROLL_RENDER_DEBOUNCE_MS);
+  }
+
+  /** Immediate render for screen transitions. Cancels any pending scroll render. */
+  private renderNow(): void {
+    if (this.scrollRenderTimer) {
+      clearTimeout(this.scrollRenderTimer);
+      this.scrollRenderTimer = null;
+    }
+    const { title, displayItems } = this.getDisplayContent();
+    this.rebuildScreen(title, displayItems);
   }
 
   private selectCurrentItem(): void {
@@ -205,14 +197,14 @@ export class GlassesDisplay {
         this.state.sportIndex = this.cursorIndex;
         this.state.screen = GlassesScreen.COMPETITION_SELECT;
         this.cursorIndex = 0;
-        this.updateDisplay();
+        this.renderNow();
         break;
       }
       case GlassesScreen.COMPETITION_SELECT: {
         if (this.cursorIndex === 0) {
           this.state.screen = GlassesScreen.SPORT_SELECT;
           this.cursorIndex = this.state.sportIndex;
-          this.updateDisplay();
+          this.renderNow();
           return;
         }
         const compIndex = this.cursorIndex - 1;
@@ -223,14 +215,14 @@ export class GlassesDisplay {
         this.cursorIndex = 0;
         this.currentMatches = [];
         this.onCompetitionSelect?.(sport, sport.competitions[compIndex]);
-        this.updateDisplay();
+        this.renderNow();
         break;
       }
       case GlassesScreen.SCORES: {
         if (this.cursorIndex === 0) {
           this.state.screen = GlassesScreen.COMPETITION_SELECT;
           this.cursorIndex = this.state.competitionIndex + 1;
-          this.updateDisplay();
+          this.renderNow();
         }
         break;
       }
@@ -251,7 +243,7 @@ export class GlassesDisplay {
   updateScores(matches: Match[]): void {
     this.currentMatches = matches;
     if (this.state.screen === GlassesScreen.SCORES) {
-      this.updateDisplay();
+      this.renderNow();
     }
   }
 
@@ -262,7 +254,7 @@ export class GlassesDisplay {
       competitionIndex: 0,
     };
     this.cursorIndex = 0;
-    this.updateDisplay();
+    this.renderNow();
   }
 
   private getScreenItems(): { title: string; items: string[] } {
@@ -296,13 +288,12 @@ export class GlassesDisplay {
     }
   }
 
-  private getDisplayText(): string {
+  private getDisplayContent(): { title: string; displayItems: string[] } {
     const { title, items } = this.getScreenItems();
-    const lines = [
-      title,
-      ...items.map((item, i) => (i === this.cursorIndex ? '> ' : '  ') + item),
-    ];
-    return lines.join('\n');
+    const displayItems = items.map((item, i) => {
+      return (i === this.cursorIndex ? '> ' : '  ') + item;
+    });
+    return { title, displayItems };
   }
 
   private formatMatch(match: Match): string {
@@ -312,33 +303,61 @@ export class GlassesDisplay {
     return `${match.homeTeam} v ${match.awayTeam}`;
   }
 
-  private async updateDisplay(): Promise<void> {
+  private buildPageConfig(title: string, displayItems: string[]) {
+    return {
+      containerTotalNum: 2,
+      textObject: [
+        new TextContainerProperty({
+          containerID: 1,
+          containerName: 'header',
+          content: title,
+          xPosition: 0,
+          yPosition: 0,
+          width: DISPLAY_WIDTH,
+          height: HEADER_HEIGHT,
+          isEventCapture: 0,
+          paddingLength: 0,
+        }),
+      ],
+      listObject: [
+        new ListContainerProperty({
+          containerID: 2,
+          containerName: 'menu',
+          xPosition: 0,
+          yPosition: HEADER_HEIGHT,
+          width: DISPLAY_WIDTH,
+          height: DISPLAY_HEIGHT - HEADER_HEIGHT,
+          isEventCapture: 1,
+          paddingLength: 0,
+          itemContainer: new ListItemContainerProperty({
+            itemCount: displayItems.length,
+            itemWidth: 0,
+            isItemSelectBorderEn: 0,
+            itemName: displayItems,
+          }),
+        }),
+      ],
+    };
+  }
+
+  private async rebuildScreen(title: string, displayItems: string[]): Promise<void> {
     if (!this.connected || !this.bridge || !this.startupRendered) return;
 
-    // Coalesce rapid updates
-    if (this.updateInFlight) {
-      this.pendingUpdate = true;
-      return;
-    }
+    if (this.rebuildInFlight) return;
 
-    this.updateInFlight = true;
-    const content = this.getDisplayText();
+    this.rebuildInFlight = true;
+    // Suppress events during the rebuild (catches events that fire before Promise resolves)
+    this.suppressEventsUntil = Date.now() + 10_000;
     try {
-      await this.bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: 1,
-          containerName: 'display',
-          content,
-        })
+      await this.bridge.rebuildPageContainer(
+        new RebuildPageContainer(this.buildPageConfig(title, displayItems))
       );
-    } catch (e) {
-      console.error('[Glasses] Display update failed:', e);
+    } catch {
+      // Silently handle rebuild failures
     } finally {
-      this.updateInFlight = false;
-      if (this.pendingUpdate) {
-        this.pendingUpdate = false;
-        this.updateDisplay();
-      }
+      // Suppress spurious initialization events from the new list container
+      this.suppressEventsUntil = Date.now() + POST_REBUILD_SUPPRESS_MS;
+      this.rebuildInFlight = false;
     }
   }
 }
