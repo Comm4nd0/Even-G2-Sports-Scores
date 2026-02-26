@@ -33,8 +33,6 @@ export interface NavigationState {
   screen: GlassesScreen;
   sportIndex: number;
   competitionIndex: number;
-  cursorIndex: number;
-  scrollOffset: number;
 }
 
 export const SPORTS_CONFIG: Sport[] = [
