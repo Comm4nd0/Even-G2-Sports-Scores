@@ -1,50 +1,45 @@
 import {
   waitForEvenAppBridge,
   CreateStartUpPageContainer,
+  RebuildPageContainer,
   StartUpPageCreateResult,
   TextContainerProperty,
-  TextContainerUpgrade,
+  ListContainerProperty,
+  ListItemContainerProperty,
   OsEventTypeList,
   type EvenAppBridge,
 } from '@evenrealities/even_hub_sdk';
-import { Sport, Competition, Match, GlassesScreen, NavigationState, SPORTS_CONFIG } from './types';
+import { Sport, Competition, Match, GlassesScreen, SPORTS_CONFIG } from './types';
 
 type StatusCallback = (msg: string, ok: boolean) => void;
-type SportSelectCallback = (sport: Sport) => void;
 type CompetitionSelectCallback = (sport: Sport, competition: Competition) => void;
 
 const DISPLAY_WIDTH = 576;
 const DISPLAY_HEIGHT = 288;
-const MAX_VISIBLE_ITEMS = 4;
+const HEADER_HEIGHT = 48;
 
 export class GlassesDisplay {
   private bridge: EvenAppBridge | null = null;
   private connected = false;
   private startupRendered = false;
-  private pushInFlight = false;
-  private pendingContent: string | null = null;
+  private rebuildInFlight = false;
+  private pendingRebuild: { title: string; items: string[] } | null = null;
 
   private onStatus: StatusCallback | null = null;
-  private onSportSelect: SportSelectCallback | null = null;
   private onCompetitionSelect: CompetitionSelectCallback | null = null;
 
   private enabledSports: Sport[] = [...SPORTS_CONFIG];
 
-  private state: NavigationState = {
-    screen: GlassesScreen.SPORT_SELECT,
+  private state = {
+    screen: GlassesScreen.SPORT_SELECT as GlassesScreen,
     sportIndex: 0,
     competitionIndex: 0,
-    cursorIndex: 0,
-    scrollOffset: 0,
   };
 
   private currentMatches: Match[] = [];
 
   setOnStatus(cb: StatusCallback): void {
     this.onStatus = cb;
-  }
-  setOnSportSelect(cb: SportSelectCallback): void {
-    this.onSportSelect = cb;
   }
   setOnCompetitionSelect(cb: CompetitionSelectCallback): void {
     this.onCompetitionSelect = cb;
@@ -56,11 +51,9 @@ export class GlassesDisplay {
       screen: GlassesScreen.SPORT_SELECT,
       sportIndex: 0,
       competitionIndex: 0,
-      cursorIndex: 0,
-      scrollOffset: 0,
     };
     this.currentMatches = [];
-    this.render();
+    this.renderScreen();
   }
 
   private reportStatus(msg: string, ok: boolean): void {
@@ -80,12 +73,20 @@ export class GlassesDisplay {
         this.onEvent(event);
       });
 
-      const result = await withTimeout(this.createStartupPage(), 8_000);
+      const { title, items } = this.getScreenContent();
+      const result = await withTimeout(
+        bridge.createStartUpPageContainer(
+          new CreateStartUpPageContainer(this.buildPageConfig(title, items))
+        ),
+        8_000
+      );
+
       if (result !== StartUpPageCreateResult.success) {
         this.reportStatus(`Page create returned ${result}`, false);
         return false;
       }
 
+      this.startupRendered = true;
       this.connected = true;
       this.reportStatus('Connected', true);
       return true;
@@ -101,138 +102,69 @@ export class GlassesDisplay {
     return this.connected;
   }
 
-  private async createStartupPage(): Promise<StartUpPageCreateResult> {
-    if (!this.bridge) throw new Error('No bridge');
-
-    const config = {
-      containerTotalNum: 1,
-      textObject: [
-        new TextContainerProperty({
-          containerID: 1,
-          containerName: 'screen',
-          content: 'Sports Scores\nLoading...',
-          xPosition: 0,
-          yPosition: 0,
-          width: DISPLAY_WIDTH,
-          height: DISPLAY_HEIGHT,
-          isEventCapture: 1,
-          paddingLength: 0,
-        }),
-      ],
-    };
-
-    const result = await this.bridge.createStartUpPageContainer(
-      new CreateStartUpPageContainer(config)
-    );
-    console.log('[Glasses] createStartUpPageContainer result:', result);
-    if (result === StartUpPageCreateResult.success) {
-      this.startupRendered = true;
-    }
-    return result;
-  }
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private onEvent(event: any): void {
     if (event.sysEvent) return;
 
-    const evtType = event.textEvent?.eventType ?? event.listEvent?.eventType;
-    if (!(event.textEvent || event.listEvent)) return;
-
-    if (evtType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
-      this.navigateDown();
-    } else if (evtType === OsEventTypeList.SCROLL_TOP_EVENT) {
-      this.navigateUp();
-    } else if (
-      evtType === OsEventTypeList.CLICK_EVENT ||
-      evtType === OsEventTypeList.DOUBLE_CLICK_EVENT ||
-      evtType === 0 ||
-      evtType === undefined
-    ) {
-      this.selectItem();
-    }
-  }
-
-  private navigateUp(): void {
-    if (this.state.cursorIndex > 0) {
-      this.state.cursorIndex--;
-      if (this.state.cursorIndex < this.state.scrollOffset) {
-        this.state.scrollOffset = this.state.cursorIndex;
+    if (event.listEvent) {
+      const evtType = event.listEvent.eventType;
+      if (
+        evtType === OsEventTypeList.CLICK_EVENT ||
+        evtType === OsEventTypeList.DOUBLE_CLICK_EVENT ||
+        evtType === 0 ||
+        evtType === undefined
+      ) {
+        const index = event.listEvent.currentSelectItemIndex;
+        if (index != null) {
+          this.handleListSelect(index);
+        }
       }
+      return;
     }
-    this.render();
+
+    // Text events not expected with list container
   }
 
-  private navigateDown(): void {
-    const count = this.getItemCount();
-    if (this.state.cursorIndex < count - 1) {
-      this.state.cursorIndex++;
-      if (this.state.cursorIndex >= this.state.scrollOffset + MAX_VISIBLE_ITEMS) {
-        this.state.scrollOffset = this.state.cursorIndex - MAX_VISIBLE_ITEMS + 1;
-      }
-    }
-    this.render();
-  }
-
-  private selectItem(): void {
-    const { screen, cursorIndex } = this.state;
-
-    switch (screen) {
+  private handleListSelect(index: number): void {
+    switch (this.state.screen) {
       case GlassesScreen.SPORT_SELECT: {
-        this.state.sportIndex = cursorIndex;
+        if (index < 0 || index >= this.enabledSports.length) return;
+        this.state.sportIndex = index;
         this.state.screen = GlassesScreen.COMPETITION_SELECT;
-        this.state.cursorIndex = 0;
-        this.state.scrollOffset = 0;
-        const sport = this.enabledSports[this.state.sportIndex];
-        this.onSportSelect?.(sport);
-        this.render();
+        this.renderScreen();
         break;
       }
       case GlassesScreen.COMPETITION_SELECT: {
-        if (cursorIndex === 0) {
-          // Back
+        if (index === 0) {
           this.state.screen = GlassesScreen.SPORT_SELECT;
-          this.state.cursorIndex = this.state.sportIndex;
-          this.state.scrollOffset = 0;
-          this.render();
+          this.renderScreen();
           return;
         }
-        this.state.competitionIndex = cursorIndex - 1;
-        this.state.screen = GlassesScreen.SCORES;
-        this.state.cursorIndex = 0;
-        this.state.scrollOffset = 0;
+        const compIndex = index - 1;
         const sport = this.enabledSports[this.state.sportIndex];
-        const comp = sport.competitions[this.state.competitionIndex];
-        this.onCompetitionSelect?.(sport, comp);
-        this.pushContent(`${comp.name}\n\nLoading scores...`);
+        if (compIndex >= sport.competitions.length) return;
+        this.state.competitionIndex = compIndex;
+        this.state.screen = GlassesScreen.SCORES;
+        this.currentMatches = [];
+        this.onCompetitionSelect?.(sport, sport.competitions[compIndex]);
+        this.renderScreen();
         break;
       }
       case GlassesScreen.SCORES: {
-        if (cursorIndex === 0) {
-          // Back
+        if (index === 0) {
           this.state.screen = GlassesScreen.COMPETITION_SELECT;
-          this.state.cursorIndex = this.state.competitionIndex + 1;
-          this.state.scrollOffset = 0;
-          this.render();
+          this.renderScreen();
         }
         break;
       }
-    }
-  }
-
-  private getItemCount(): number {
-    switch (this.state.screen) {
-      case GlassesScreen.SPORT_SELECT:
-        return this.enabledSports.length;
-      case GlassesScreen.COMPETITION_SELECT:
-        return 1 + this.enabledSports[this.state.sportIndex].competitions.length;
-      case GlassesScreen.SCORES:
-        return 1 + this.currentMatches.length;
     }
   }
 
   updateScores(matches: Match[]): void {
     this.currentMatches = matches;
-    this.render();
+    if (this.state.screen === GlassesScreen.SCORES) {
+      this.renderScreen();
+    }
   }
 
   showInitialScreen(): void {
@@ -240,58 +172,39 @@ export class GlassesDisplay {
       screen: GlassesScreen.SPORT_SELECT,
       sportIndex: 0,
       competitionIndex: 0,
-      cursorIndex: 0,
-      scrollOffset: 0,
     };
-    this.render();
+    this.renderScreen();
   }
 
-  private render(): void {
+  private getScreenContent(): { title: string; items: string[] } {
     switch (this.state.screen) {
       case GlassesScreen.SPORT_SELECT:
-        this.renderSportSelect();
-        break;
-      case GlassesScreen.COMPETITION_SELECT:
-        this.renderCompetitionSelect();
-        break;
-      case GlassesScreen.SCORES:
-        this.renderScores();
-        break;
+        return {
+          title: 'SPORTS SCORES',
+          items: this.enabledSports.map((s) => s.name),
+        };
+      case GlassesScreen.COMPETITION_SELECT: {
+        const sport = this.enabledSports[this.state.sportIndex];
+        return {
+          title: sport.name.toUpperCase(),
+          items: ['< Back', ...sport.competitions.map((c) => c.name)],
+        };
+      }
+      case GlassesScreen.SCORES: {
+        const comp =
+          this.enabledSports[this.state.sportIndex].competitions[this.state.competitionIndex];
+        if (this.currentMatches.length === 0) {
+          return {
+            title: comp.name,
+            items: ['< Back', 'Loading scores...'],
+          };
+        }
+        return {
+          title: comp.name,
+          items: ['< Back', ...this.currentMatches.map((m) => this.formatMatch(m))],
+        };
+      }
     }
-  }
-
-  private renderSportSelect(): void {
-    const items = this.enabledSports.map((s) => s.name);
-    this.pushContent(
-      this.buildListScreen('SPORTS SCORES', items, this.state.cursorIndex, this.state.scrollOffset)
-    );
-  }
-
-  private renderCompetitionSelect(): void {
-    const sport = this.enabledSports[this.state.sportIndex];
-    const items = ['< Back', ...sport.competitions.map((c) => c.name)];
-    this.pushContent(
-      this.buildListScreen(
-        sport.name.toUpperCase(),
-        items,
-        this.state.cursorIndex,
-        this.state.scrollOffset
-      )
-    );
-  }
-
-  private renderScores(): void {
-    const comp = this.enabledSports[this.state.sportIndex].competitions[this.state.competitionIndex];
-
-    if (this.currentMatches.length === 0) {
-      this.pushContent(`${comp.name}\n--------------------\n  No scores available`);
-      return;
-    }
-
-    const items = ['< Back', ...this.currentMatches.map((m) => this.formatMatch(m))];
-    this.pushContent(
-      this.buildListScreen(comp.name, items, this.state.cursorIndex, this.state.scrollOffset)
-    );
   }
 
   private formatMatch(match: Match): string {
@@ -301,61 +214,69 @@ export class GlassesDisplay {
     return `${match.homeTeam} v ${match.awayTeam}`;
   }
 
-  private buildListScreen(
-    title: string,
-    items: string[],
-    cursor: number,
-    offset: number
-  ): string {
-    const lines: string[] = [title];
-
-    if (offset > 0) {
-      lines.push('------------ more --');
-    } else {
-      lines.push('--------------------');
-    }
-
-    const visible = items.slice(offset, offset + MAX_VISIBLE_ITEMS);
-    for (let i = 0; i < visible.length; i++) {
-      const globalIndex = offset + i;
-      const prefix = globalIndex === cursor ? '> ' : '  ';
-      lines.push(prefix + visible[i]);
-    }
-
-    if (offset + MAX_VISIBLE_ITEMS < items.length) {
-      lines.push('------------ more --');
-    }
-
-    return lines.join('\n');
+  private buildPageConfig(title: string, items: string[]) {
+    return {
+      containerTotalNum: 2,
+      textObject: [
+        new TextContainerProperty({
+          containerID: 1,
+          containerName: 'header',
+          content: title,
+          xPosition: 0,
+          yPosition: 0,
+          width: DISPLAY_WIDTH,
+          height: HEADER_HEIGHT,
+          isEventCapture: 0,
+          paddingLength: 0,
+        }),
+      ],
+      listObject: [
+        new ListContainerProperty({
+          containerID: 2,
+          containerName: 'menu',
+          xPosition: 0,
+          yPosition: HEADER_HEIGHT,
+          width: DISPLAY_WIDTH,
+          height: DISPLAY_HEIGHT - HEADER_HEIGHT,
+          isEventCapture: 1,
+          paddingLength: 0,
+          itemContainer: new ListItemContainerProperty({
+            itemCount: items.length,
+            itemWidth: 0,
+            isItemSelectBorderEn: 1,
+            itemName: items,
+          }),
+        }),
+      ],
+    };
   }
 
-  private async pushContent(content: string): Promise<void> {
+  private renderScreen(): void {
+    const { title, items } = this.getScreenContent();
+    this.rebuildScreen(title, items);
+  }
+
+  private async rebuildScreen(title: string, items: string[]): Promise<void> {
     if (!this.connected || !this.bridge || !this.startupRendered) return;
 
-    if (this.pushInFlight) {
-      this.pendingContent = content;
+    if (this.rebuildInFlight) {
+      this.pendingRebuild = { title, items };
       return;
     }
 
-    this.pushInFlight = true;
+    this.rebuildInFlight = true;
     try {
-      await this.bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: 1,
-          containerName: 'screen',
-          contentOffset: 0,
-          contentLength: 2000,
-          content,
-        })
+      await this.bridge.rebuildPageContainer(
+        new RebuildPageContainer(this.buildPageConfig(title, items))
       );
     } catch {
-      // Silently handle update failures
+      // Silently handle rebuild failures
     } finally {
-      this.pushInFlight = false;
-      if (this.pendingContent !== null) {
-        const next = this.pendingContent;
-        this.pendingContent = null;
-        this.pushContent(next);
+      this.rebuildInFlight = false;
+      if (this.pendingRebuild) {
+        const { title: t, items: i } = this.pendingRebuild;
+        this.pendingRebuild = null;
+        this.rebuildScreen(t, i);
       }
     }
   }
