@@ -105,28 +105,17 @@ export class GlassesDisplay {
     if (!this.bridge) throw new Error('No bridge');
 
     const config = {
-      containerTotalNum: 2,
+      containerTotalNum: 1,
       textObject: [
         new TextContainerProperty({
           containerID: 1,
-          containerName: 'evt',
-          content: ' ',
-          xPosition: 0,
-          yPosition: 0,
-          width: DISPLAY_WIDTH,
-          height: DISPLAY_HEIGHT,
-          isEventCapture: 1,
-          paddingLength: 0,
-        }),
-        new TextContainerProperty({
-          containerID: 2,
           containerName: 'screen',
           content: 'Sports Scores\nLoading...',
           xPosition: 0,
           yPosition: 0,
           width: DISPLAY_WIDTH,
           height: DISPLAY_HEIGHT,
-          isEventCapture: 0,
+          isEventCapture: 1,
           paddingLength: 0,
         }),
       ],
@@ -155,6 +144,7 @@ export class GlassesDisplay {
       this.navigateUp();
     } else if (
       evtType === OsEventTypeList.CLICK_EVENT ||
+      evtType === OsEventTypeList.DOUBLE_CLICK_EVENT ||
       evtType === 0 ||
       evtType === undefined
     ) {
@@ -351,7 +341,7 @@ export class GlassesDisplay {
     try {
       await this.bridge.textContainerUpgrade(
         new TextContainerUpgrade({
-          containerID: 2,
+          containerID: 1,
           containerName: 'screen',
           contentOffset: 0,
           contentLength: 2000,
