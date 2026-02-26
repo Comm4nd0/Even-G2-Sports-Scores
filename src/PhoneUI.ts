@@ -8,6 +8,7 @@ export class PhoneUI {
   private listContainer: HTMLElement;
   private statusEl: HTMLElement;
   private enabledIds: Set<string>;
+  private availableSports: Sport[] = [...SPORTS_CONFIG];
   private onSportsChange: SportsChangeCallback | null = null;
 
   constructor() {
@@ -26,8 +27,17 @@ export class PhoneUI {
     this.statusEl.className = ok ? 'connected' : '';
   }
 
+  setAvailableSports(sports: Sport[]): void {
+    this.availableSports = sports;
+    const availableIds = new Set(sports.map((s) => s.id));
+    const validIds = [...this.enabledIds].filter((id) => availableIds.has(id));
+    this.enabledIds = validIds.length > 0 ? new Set(validIds) : new Set(sports.map((s) => s.id));
+    this.saveEnabledIds();
+    this.buildList();
+  }
+
   getEnabledSports(): Sport[] {
-    return SPORTS_CONFIG.filter((s) => this.enabledIds.has(s.id));
+    return this.availableSports.filter((s) => this.enabledIds.has(s.id));
   }
 
   private loadEnabledIds(): Set<string> {
@@ -35,13 +45,13 @@ export class PhoneUI {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const ids = JSON.parse(stored) as string[];
-        const valid = ids.filter((id) => SPORTS_CONFIG.some((s) => s.id === id));
+        const valid = ids.filter((id) => this.availableSports.some((s) => s.id === id));
         if (valid.length > 0) return new Set(valid);
       }
     } catch {
       /* ignore */
     }
-    return new Set(SPORTS_CONFIG.map((s) => s.id));
+    return new Set(this.availableSports.map((s) => s.id));
   }
 
   private saveEnabledIds(): void {
@@ -55,7 +65,15 @@ export class PhoneUI {
   private buildList(): void {
     this.listContainer.textContent = '';
 
-    for (const sport of SPORTS_CONFIG) {
+    if (this.availableSports.length === 0) {
+      const msg = document.createElement('div');
+      msg.className = 'no-tournaments';
+      msg.textContent = 'No active tournaments';
+      this.listContainer.appendChild(msg);
+      return;
+    }
+
+    for (const sport of this.availableSports) {
       const row = document.createElement('label');
       row.className = 'sport-row';
 

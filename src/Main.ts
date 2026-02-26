@@ -25,18 +25,37 @@ glassesDisplay.setOnCompetitionSelect(async (_sport: Sport, competition: Competi
   glassesDisplay.updateScores(matches);
 });
 
+// Fetch active tournaments and update both UIs
+async function loadActiveTournaments(connected: boolean): Promise<void> {
+  try {
+    const activeSports = await sportsService.getActiveSports();
+    phoneUI.setAvailableSports(activeSports);
+    if (connected) {
+      glassesDisplay.setEnabledSports(phoneUI.getEnabledSports());
+    }
+  } catch (e) {
+    console.error('[Main] Error loading active sports:', e);
+  }
+}
+
 // Connect to glasses
 glassesDisplay
   .init()
   .then(async (connected) => {
     if (!connected) {
       phoneUI.setStatus('Glasses not connected', false);
-      return;
+    } else {
+      phoneUI.setStatus('Loading tournaments...', true);
     }
-    phoneUI.setStatus('Connected to glasses', true);
-    glassesDisplay.setEnabledSports(phoneUI.getEnabledSports());
+
+    await loadActiveTournaments(connected);
+
+    if (connected) {
+      phoneUI.setStatus('Connected to glasses', true);
+    }
   })
-  .catch((err) => {
+  .catch(async (err) => {
     console.error('[Main] Glasses init error:', err);
     phoneUI.setStatus('Glasses not connected', false);
+    await loadActiveTournaments(false);
   });
