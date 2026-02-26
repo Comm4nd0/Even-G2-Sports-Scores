@@ -1,9 +1,9 @@
 import {
   waitForEvenAppBridge,
   CreateStartUpPageContainer,
-  RebuildPageContainer,
   StartUpPageCreateResult,
   TextContainerProperty,
+  TextContainerUpgrade,
   ListContainerProperty,
   ListItemContainerProperty,
   OsEventTypeList,
@@ -16,14 +16,17 @@ type CompetitionSelectCallback = (sport: Sport, competition: Competition) => voi
 
 const DISPLAY_WIDTH = 576;
 const DISPLAY_HEIGHT = 288;
-const HEADER_HEIGHT = 48;
+// Fixed dummy items in the event-capture list container.
+// This container is never rebuilt, so no spurious events are fired.
+const EVENT_ITEM_COUNT = 20;
 
 export class GlassesDisplay {
   private bridge: EvenAppBridge | null = null;
   private connected = false;
   private startupRendered = false;
-  private rebuildInFlight = false;
-  private pendingRebuild: { title: string; items: string[] } | null = null;
+  private suppressEventsUntil = 0;
+  private updateInFlight = false;
+  private pendingUpdate = false;
 
   private onStatus: StatusCallback | null = null;
   private onCompetitionSelect: CompetitionSelectCallback | null = null;
@@ -55,7 +58,7 @@ export class GlassesDisplay {
     };
     this.cursorIndex = 0;
     this.currentMatches = [];
-    this.renderScreen();
+    this.updateDisplay();
   }
 
   private reportStatus(msg: string, ok: boolean): void {
@@ -75,10 +78,48 @@ export class GlassesDisplay {
         this.onEvent(event);
       });
 
-      const { title, displayItems } = this.getDisplayContent();
+      // Suppress spurious events during initial page creation
+      this.suppressEventsUntil = Date.now() + 5000;
+
+      const content = this.getDisplayText();
+      const eventItems = Array.from({ length: EVENT_ITEM_COUNT }, () => ' ');
+
       const result = await withTimeout(
         bridge.createStartUpPageContainer(
-          new CreateStartUpPageContainer(this.buildPageConfig(title, displayItems))
+          new CreateStartUpPageContainer({
+            containerTotalNum: 2,
+            textObject: [
+              new TextContainerProperty({
+                containerID: 1,
+                containerName: 'display',
+                content,
+                xPosition: 0,
+                yPosition: 0,
+                width: DISPLAY_WIDTH,
+                height: DISPLAY_HEIGHT,
+                isEventCapture: 0,
+                paddingLength: 0,
+              }),
+            ],
+            listObject: [
+              new ListContainerProperty({
+                containerID: 2,
+                containerName: 'events',
+                xPosition: 0,
+                yPosition: 0,
+                width: DISPLAY_WIDTH,
+                height: DISPLAY_HEIGHT,
+                isEventCapture: 1,
+                paddingLength: 0,
+                itemContainer: new ListItemContainerProperty({
+                  itemCount: EVENT_ITEM_COUNT,
+                  itemWidth: 0,
+                  isItemSelectBorderEn: 0,
+                  itemName: eventItems,
+                }),
+              }),
+            ],
+          })
         ),
         8_000
       );
@@ -90,6 +131,8 @@ export class GlassesDisplay {
 
       this.startupRendered = true;
       this.connected = true;
+      // Allow events after the list container finishes initializing
+      this.suppressEventsUntil = Date.now() + 500;
       this.reportStatus('Connected', true);
       return true;
     } catch (e) {
@@ -108,8 +151,17 @@ export class GlassesDisplay {
   private onEvent(event: any): void {
     if (event.sysEvent) return;
 
+    // Suppress spurious events after page creation
+    if (Date.now() < this.suppressEventsUntil) {
+      console.log('[Glasses] Suppressing event during initialization');
+      return;
+    }
+
     if (event.listEvent) {
       const evtType = event.listEvent.eventType;
+      console.log(
+        `[Glasses] Event: type=${evtType}, cursor=${this.cursorIndex}, screen=${this.state.screen}`
+      );
 
       // Inverted scroll: SCROLL_BOTTOM → move cursor up, SCROLL_TOP → move cursor down
       if (evtType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
@@ -126,14 +178,12 @@ export class GlassesDisplay {
       }
       return;
     }
-
-    // Text events not expected with list container
   }
 
   private navigateUp(): void {
     if (this.cursorIndex > 0) {
       this.cursorIndex--;
-      this.renderScreen();
+      this.updateDisplay();
     }
   }
 
@@ -141,25 +191,28 @@ export class GlassesDisplay {
     const itemCount = this.getItemCount();
     if (this.cursorIndex < itemCount - 1) {
       this.cursorIndex++;
-      this.renderScreen();
+      this.updateDisplay();
     }
   }
 
   private selectCurrentItem(): void {
+    console.log(
+      `[Glasses] Select: screen=${this.state.screen}, cursor=${this.cursorIndex}`
+    );
     switch (this.state.screen) {
       case GlassesScreen.SPORT_SELECT: {
         if (this.cursorIndex < 0 || this.cursorIndex >= this.enabledSports.length) return;
         this.state.sportIndex = this.cursorIndex;
         this.state.screen = GlassesScreen.COMPETITION_SELECT;
         this.cursorIndex = 0;
-        this.renderScreen();
+        this.updateDisplay();
         break;
       }
       case GlassesScreen.COMPETITION_SELECT: {
         if (this.cursorIndex === 0) {
           this.state.screen = GlassesScreen.SPORT_SELECT;
           this.cursorIndex = this.state.sportIndex;
-          this.renderScreen();
+          this.updateDisplay();
           return;
         }
         const compIndex = this.cursorIndex - 1;
@@ -170,14 +223,14 @@ export class GlassesDisplay {
         this.cursorIndex = 0;
         this.currentMatches = [];
         this.onCompetitionSelect?.(sport, sport.competitions[compIndex]);
-        this.renderScreen();
+        this.updateDisplay();
         break;
       }
       case GlassesScreen.SCORES: {
         if (this.cursorIndex === 0) {
           this.state.screen = GlassesScreen.COMPETITION_SELECT;
           this.cursorIndex = this.state.competitionIndex + 1;
-          this.renderScreen();
+          this.updateDisplay();
         }
         break;
       }
@@ -198,7 +251,7 @@ export class GlassesDisplay {
   updateScores(matches: Match[]): void {
     this.currentMatches = matches;
     if (this.state.screen === GlassesScreen.SCORES) {
-      this.renderScreen();
+      this.updateDisplay();
     }
   }
 
@@ -209,7 +262,7 @@ export class GlassesDisplay {
       competitionIndex: 0,
     };
     this.cursorIndex = 0;
-    this.renderScreen();
+    this.updateDisplay();
   }
 
   private getScreenItems(): { title: string; items: string[] } {
@@ -243,12 +296,13 @@ export class GlassesDisplay {
     }
   }
 
-  private getDisplayContent(): { title: string; displayItems: string[] } {
+  private getDisplayText(): string {
     const { title, items } = this.getScreenItems();
-    const displayItems = items.map((item, i) => {
-      return (i === this.cursorIndex ? '> ' : '  ') + item;
-    });
-    return { title, displayItems };
+    const lines = [
+      title,
+      ...items.map((item, i) => (i === this.cursorIndex ? '> ' : '  ') + item),
+    ];
+    return lines.join('\n');
   }
 
   private formatMatch(match: Match): string {
@@ -258,69 +312,32 @@ export class GlassesDisplay {
     return `${match.homeTeam} v ${match.awayTeam}`;
   }
 
-  private buildPageConfig(title: string, displayItems: string[]) {
-    return {
-      containerTotalNum: 2,
-      textObject: [
-        new TextContainerProperty({
-          containerID: 1,
-          containerName: 'header',
-          content: title,
-          xPosition: 0,
-          yPosition: 0,
-          width: DISPLAY_WIDTH,
-          height: HEADER_HEIGHT,
-          isEventCapture: 0,
-          paddingLength: 0,
-        }),
-      ],
-      listObject: [
-        new ListContainerProperty({
-          containerID: 2,
-          containerName: 'menu',
-          xPosition: 0,
-          yPosition: HEADER_HEIGHT,
-          width: DISPLAY_WIDTH,
-          height: DISPLAY_HEIGHT - HEADER_HEIGHT,
-          isEventCapture: 1,
-          paddingLength: 0,
-          itemContainer: new ListItemContainerProperty({
-            itemCount: displayItems.length,
-            itemWidth: 0,
-            isItemSelectBorderEn: 0,
-            itemName: displayItems,
-          }),
-        }),
-      ],
-    };
-  }
-
-  private renderScreen(): void {
-    const { title, displayItems } = this.getDisplayContent();
-    this.rebuildScreen(title, displayItems);
-  }
-
-  private async rebuildScreen(title: string, displayItems: string[]): Promise<void> {
+  private async updateDisplay(): Promise<void> {
     if (!this.connected || !this.bridge || !this.startupRendered) return;
 
-    if (this.rebuildInFlight) {
-      this.pendingRebuild = { title, items: displayItems };
+    // Coalesce rapid updates
+    if (this.updateInFlight) {
+      this.pendingUpdate = true;
       return;
     }
 
-    this.rebuildInFlight = true;
+    this.updateInFlight = true;
+    const content = this.getDisplayText();
     try {
-      await this.bridge.rebuildPageContainer(
-        new RebuildPageContainer(this.buildPageConfig(title, displayItems))
+      await this.bridge.textContainerUpgrade(
+        new TextContainerUpgrade({
+          containerID: 1,
+          containerName: 'display',
+          content,
+        })
       );
-    } catch {
-      // Silently handle rebuild failures
+    } catch (e) {
+      console.error('[Glasses] Display update failed:', e);
     } finally {
-      this.rebuildInFlight = false;
-      if (this.pendingRebuild) {
-        const { title: t, items: i } = this.pendingRebuild;
-        this.pendingRebuild = null;
-        this.rebuildScreen(t, i);
+      this.updateInFlight = false;
+      if (this.pendingUpdate) {
+        this.pendingUpdate = false;
+        this.updateDisplay();
       }
     }
   }
