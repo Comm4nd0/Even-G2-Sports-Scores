@@ -1,4 +1,4 @@
-import { Competition, Match, SPORTS_CONFIG } from './types';
+import { Competition, Match, Sport, SPORTS_CONFIG } from './types';
 
 const API_BASE = 'https://www.thesportsdb.com/api/v1/json/3';
 const CACHE_DURATION = 5 * 60 * 1000;
@@ -14,6 +14,31 @@ export class SportsService {
   getCompetitions(sportId: string): Competition[] {
     const sport = SPORTS_CONFIG.find((s) => s.id === sportId);
     return sport?.competitions ?? [];
+  }
+
+  async getActiveSports(): Promise<Sport[]> {
+    const activeSports: Sport[] = [];
+
+    const allChecks = await Promise.all(
+      SPORTS_CONFIG.flatMap((sport) =>
+        sport.competitions.map(async (comp) => {
+          const matches = await this.getScores(comp);
+          return { sportId: sport.id, competition: comp, hasMatches: matches.length > 0 };
+        })
+      )
+    );
+
+    for (const sport of SPORTS_CONFIG) {
+      const activeCompetitions = allChecks
+        .filter((c) => c.sportId === sport.id && c.hasMatches)
+        .map((c) => c.competition);
+
+      if (activeCompetitions.length > 0) {
+        activeSports.push({ ...sport, competitions: activeCompetitions });
+      }
+    }
+
+    return activeSports;
   }
 
   async getScores(competition: Competition): Promise<Match[]> {

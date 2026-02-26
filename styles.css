@@ -134,3 +134,11 @@ header h1 {
   transform: translateX(20px);
   background: #00ff88;
 }
+
+/* Empty state */
+.no-tournaments {
+  text-align: center;
+  padding: 32px 16px;
+  color: #666;
+  font-size: 14px;
+}
